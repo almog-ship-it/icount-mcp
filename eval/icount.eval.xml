@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  iCount MCP — read-only evaluation set.
+
+  Each question is independent, requires multiple tool calls, and is answerable from a populated
+  iCount account using only read-only tools (no mutations). Answers are stable for a given account
+  snapshot but the operator must establish ground truth before running this eval against their data.
+
+  Run by exporting ICOUNT_API_TOKEN and ICOUNT_CID, then connecting an MCP client to the server,
+  and prompting the model with each <question>. Compare the model's final answer against <answer>.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Using the iCount tools, list every distinct document type that has at least one document in my account in 2025, sorted alphabetically. Return only the doctype identifiers (e.g. invoice, receipt) as a comma-separated list.</question>
+    <answer>OPERATOR_TO_FILL: comma-separated alphabetical list of doctypes present in 2025</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Find the client with the largest total invoiced amount (sum of doctype=invoice + doctype=invrec, before VAT) in calendar year 2025, and return their client_id.</question>
+    <answer>OPERATOR_TO_FILL: client_id</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many open (unpaid) invoices exist across all clients right now? Return the integer count.</question>
+    <answer>OPERATOR_TO_FILL: integer</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>List the supplier IDs of every supplier from whom I recorded an expense between 2025-01-01 and 2025-12-31. Return as a JSON array of integers, sorted ascending.</question>
+    <answer>OPERATOR_TO_FILL: sorted JSON array of supplier IDs</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>For the client with the most documents in my account, return their client_id and the total document count as "client_id=N count=M".</question>
+    <answer>OPERATOR_TO_FILL: client_id=N count=M</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is my company's registered name as it appears on iCount's account info? Return the exact string.</question>
+    <answer>OPERATOR_TO_FILL: company name string</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many distinct expense type categories are configured in my account? Return the integer count.</question>
+    <answer>OPERATOR_TO_FILL: integer</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Find the most recent receipt (doctype=receipt) created in my account and return its docnum.</question>
+    <answer>OPERATOR_TO_FILL: docnum string</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>For the supplier with the highest total expense amount in 2025, return "supplier_id=N total=AMOUNT" where AMOUNT is the sum in shekels rounded to two decimals.</question>
+    <answer>OPERATOR_TO_FILL: supplier_id=N total=AMOUNT</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>List every contact attached to the client with the most contacts. Return their contact names as a JSON array of strings.</question>
+    <answer>OPERATOR_TO_FILL: JSON array of contact name strings</answer>
+  </qa_pair>
+</evaluation>
