@@ -2,7 +2,7 @@
 
 Multi-tenant **MCP server** for **iCount** ([icount.co.il](https://www.icount.co.il/)) — Israeli invoicing, receipts, customers, expenses, and suppliers — exposed as 29 typed tools any MCP client can call.
 
-- **Streamable HTTP** transport on **Vercel Edge** (one shared URL, anyone with their own iCount API token can use it).
+- **Streamable HTTP** transport on **Cloudflare Workers** (one shared URL, anyone with their own iCount API token can use it).
 - **Stateless multi-tenancy**: each request carries its own `Authorization: Bearer <icount_token>` and `X-Icount-Cid: <company_id>` header. The server stores nothing.
 - **Dry-run sandbox** via `X-Icount-Dry-Run: 1` — write tools log the would-be payload instead of POSTing.
 - **Local stdio shim** for personal use without deploying.
@@ -15,18 +15,17 @@ Multi-tenant **MCP server** for **iCount** ([icount.co.il](https://www.icount.co
 git clone <this repo>
 cd icount-mcp
 npm install
-npx vercel link        # one-time
-npx vercel --prod
+npx wrangler login        # one-time browser flow
+npx wrangler deploy
 ```
 
-That gives you `https://icount-mcp-<your-account>.vercel.app/api/mcp` (also `…/mcp` via the rewrite in `vercel.json`).
+That gives you `https://icount-mcp.<your-subdomain>.workers.dev`.
 
 ### Optional: gate the URL with a shared secret
 
 ```bash
-npx vercel env add MCP_ACCESS_KEY production
-# paste any random string
-npx vercel --prod
+npx wrangler secret put MCP_ACCESS_KEY
+# paste any random string when prompted
 ```
 
 Clients now must send `X-Mcp-Key: <that string>` on every request.
@@ -43,7 +42,7 @@ Each user supplies their own iCount credentials in headers — the server never 
 {
   "mcpServers": {
     "icount": {
-      "url": "https://icount-mcp-<your-account>.vercel.app/api/mcp",
+      "url": "https://icount-mcp.<your-subdomain>.workers.dev",
       "headers": {
         "Authorization": "Bearer YOUR_ICOUNT_API_TOKEN",
         "X-Icount-Cid": "YOUR_ICOUNT_COMPANY_ID"
@@ -65,14 +64,21 @@ Add `"X-Mcp-Key": "..."` if you set the gate, or `"X-Icount-Dry-Run": "1"` to te
 
 ## Local development
 
-### Run the Edge function locally
+### Run the Worker locally
 
 ```bash
-cp .env.local.example .env.local   # only needed if you set MCP_ACCESS_KEY
-npm run dev                         # starts vercel dev on http://localhost:3000
+npm run dev          # starts wrangler dev on http://localhost:8787
 ```
 
-Point [MCP Inspector](https://github.com/modelcontextprotocol/inspector) at `http://localhost:3000/api/mcp` with the same headers documented above. Use `X-Icount-Dry-Run: 1` to develop tools without burning real iCount credits.
+Point [MCP Inspector](https://github.com/modelcontextprotocol/inspector) at `http://localhost:8787` with the same headers documented above. Use `X-Icount-Dry-Run: 1` to develop tools without burning real iCount credits.
+
+To set `MCP_ACCESS_KEY` for local dev only, create a `.dev.vars` file:
+
+```
+MCP_ACCESS_KEY=local-dev-secret
+```
+
+Wrangler reads `.dev.vars` automatically. Don't commit it.
 
 ### Run as local stdio (no HTTP)
 

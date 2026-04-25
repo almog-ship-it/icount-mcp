@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .vercel/
+.wrangler/
 .env
 .env.local
 .env.*.local

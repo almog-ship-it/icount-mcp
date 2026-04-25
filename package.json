@@ -1,15 +1,15 @@
 {
   "name": "icount-mcp",
   "version": "0.1.0",
-  "description": "Multi-tenant MCP server for iCount (Israeli invoicing/accounting). Streamable HTTP on Vercel Edge.",
+  "description": "Multi-tenant MCP server for iCount (Israeli invoicing/accounting). Streamable HTTP on Cloudflare Workers.",
   "type": "module",
   "private": true,
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev": "vercel dev",
-    "deploy": "vercel --prod",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
     "stdio": "tsx src/stdio.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,10 +20,11 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
     "@types/node": "^20.14.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
-    "vercel": "^39.0.0",
-    "vitest": "^2.0.0"
+    "vitest": "^2.0.0",
+    "wrangler": "^4.0.0"
   }
 }
