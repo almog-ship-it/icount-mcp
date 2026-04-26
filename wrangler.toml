@@ -3,6 +3,14 @@ main = "src/worker.ts"
 compatibility_date = "2026-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-# MCP_ACCESS_KEY (optional URL gate) is set as a secret, not a var:
-#   wrangler secret put MCP_ACCESS_KEY
+# Required Worker secrets (set with `wrangler secret put <NAME>`):
+#   OAUTH_ENCRYPTION_KEY  — 32-byte AES-GCM key (base64), required for the OAuth flow
+#                            used by Claude Desktop's "Add custom connector" dialog.
+#                            Generate via:
+#                              node -e 'console.log(crypto.randomBytes(32).toString("base64"))'
+#                            Without this set, /authorize and /token return 500.
+#                            The legacy direct-bearer path (Authorization + X-Icount-Cid)
+#                            still works without OAUTH_ENCRYPTION_KEY.
+#   MCP_ACCESS_KEY        — optional shared secret. If set, every request must
+#                            include `X-Mcp-Key: <value>`. Off by default.
 # Don't put secrets in this file — it's committed to git.

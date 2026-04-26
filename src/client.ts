@@ -26,11 +26,18 @@ export type IcountResponse<T> = T | DryRunResult;
  * - `requestOrDryRun()` for write-style calls; returns a dry-run shape if creds.dryRun is set.
  */
 export class IcountClient {
+  private readonly fetchImpl: typeof fetch;
+
   constructor(
     private readonly creds: IcountCreds,
-    private readonly fetchImpl: typeof fetch = fetch,
+    fetchImpl?: typeof fetch,
     private readonly baseUrl: string = ICOUNT_BASE_URL,
-  ) {}
+  ) {
+    // Bind to globalThis: in Cloudflare Workers, calling fetch as a method on
+    // any other object throws "Illegal invocation". Tests pass their own mocks
+    // (which don't care about `this`), so the default-only bind is enough.
+    this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
+  }
 
   async request<T = unknown>(
     endpoint: string,

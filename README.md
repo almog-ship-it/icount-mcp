@@ -15,11 +15,16 @@ Multi-tenant **MCP server** for **iCount** ([icount.co.il](https://www.icount.co
 git clone <this repo>
 cd icount-mcp
 npm install
-npx wrangler login        # one-time browser flow
+npx wrangler login                                  # one-time browser flow
+
+# REQUIRED: generate an OAuth encryption key (32 random bytes, base64).
+node -e 'console.log(crypto.randomBytes(32).toString("base64"))'
+npx wrangler secret put OAUTH_ENCRYPTION_KEY        # paste the key when prompted
+
 npx wrangler deploy
 ```
 
-That gives you `https://icount-mcp.<your-subdomain>.workers.dev`.
+That gives you `https://icount-mcp.<your-subdomain>.workers.dev`. The OAuth encryption key is what lets the Worker issue and verify access tokens for Claude Desktop's "Add custom connector" dialog.
 
 ### Optional: gate the URL with a shared secret
 
@@ -34,31 +39,56 @@ Clients now must send `X-Mcp-Key: <that string>` on every request.
 
 ## Connecting an MCP client
 
-Each user supplies their own iCount credentials in headers — the server never sees them at deploy time.
-
-### Claude Desktop / Claude Code (HTTP transport)
-
-```json
-{
-  "mcpServers": {
-    "icount": {
-      "url": "https://icount-mcp.<your-subdomain>.workers.dev",
-      "headers": {
-        "Authorization": "Bearer YOUR_ICOUNT_API_TOKEN",
-        "X-Icount-Cid": "YOUR_ICOUNT_COMPANY_ID"
-      }
-    }
-  }
-}
-```
-
-Add `"X-Mcp-Key": "..."` if you set the gate, or `"X-Icount-Dry-Run": "1"` to test without writes.
+Each user supplies their own iCount credentials — the server never stores them.
 
 ### Get an iCount API token
 
 1. Log in to iCount.
 2. **Settings → API** (אזור הגדרות → API).
 3. Generate a token. Copy the company ID (`cid`) shown on the same page.
+
+### Option 1 (recommended) — Claude Desktop "Add custom connector"
+
+The Worker speaks OAuth 2.1, with a clever twist: the dialog's `OAuth Client ID` field is the **iCount API token**, and `OAuth Client Secret` is the **iCount CID**. There is no real OAuth provider behind the scenes — the Worker just encrypts your two values into a self-contained access token and decrypts on each request.
+
+In Claude Desktop, **Settings → Connectors → Add custom connector**:
+
+- **URL:** `https://icount-mcp.<your-subdomain>.workers.dev`
+- **OAuth Client ID:** your iCount API token
+- **OAuth Client Secret:** your iCount CID
+
+Click Connect. After the OAuth handshake completes, the 29 `icount_*` tools appear in the chat tool picker.
+
+### Option 2 — direct bearer (curl, scripts, Cursor, etc.)
+
+For non-OAuth clients, send the credentials in headers directly:
+
+```http
+POST https://icount-mcp.<your-subdomain>.workers.dev
+Authorization: Bearer YOUR_ICOUNT_API_TOKEN
+X-Icount-Cid: YOUR_ICOUNT_COMPANY_ID
+```
+
+Add `X-Mcp-Key: ...` if you set the URL gate, or `X-Icount-Dry-Run: 1` to test without writes.
+
+For HTTP-capable JSON-config clients (e.g. via `mcp-remote`):
+
+```json
+{
+  "mcpServers": {
+    "icount": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "https://icount-mcp.<your-subdomain>.workers.dev",
+        "--header", "Authorization: Bearer ${ICOUNT_API_TOKEN}",
+        "--header", "X-Icount-Cid: ${ICOUNT_CID}"
+      ],
+      "env": { "ICOUNT_API_TOKEN": "...", "ICOUNT_CID": "..." }
+    }
+  }
+}
+```
 
 ---
 
