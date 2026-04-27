@@ -16,7 +16,7 @@ interface Env {
   OAUTH_ENCRYPTION_KEY?: string;
 }
 
-const TOOL_COUNT = 29;
+const TOOL_COUNT = 30;
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -71,7 +71,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && url.pathname === "/authorize") {
-    return handleAuthorize(request, env, canonicalUrl);
+    return handleAuthorize(request, env);
   }
 
   if (request.method === "POST" && url.pathname === "/token") {
@@ -158,7 +158,6 @@ async function handleRegister(request: Request, canonicalUrl: string): Promise<R
 async function handleAuthorize(
   request: Request,
   env: Env,
-  canonicalUrl: string,
 ): Promise<Response> {
   if (!env.OAUTH_ENCRYPTION_KEY) {
     return json(

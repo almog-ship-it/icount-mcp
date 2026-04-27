@@ -208,6 +208,57 @@ export function registerDocTools(server: McpServer, client: IcountClient): void 
     },
   );
 
+  // ───────── doc send_email ─────────
+  server.registerTool(
+    "icount_doc_send_email",
+    {
+      title: "Email iCount document",
+      description:
+        "Send an existing document to a recipient by email (the iCount-hosted PDF link is included). Use this to (re)send invoices, receipts, quotes, etc. after creation.",
+      inputSchema: {
+        doctype: DocTypeSchema,
+        doc_id: z.union([z.number().int(), z.string()]),
+        email: z.string().email().describe("Primary recipient email"),
+        cc: z
+          .array(z.string().email())
+          .optional()
+          .describe("Optional CC recipients"),
+        subject: z.string().optional().describe("Override the email subject"),
+        body: z
+          .string()
+          .optional()
+          .describe("Override the email body (Hebrew or English)"),
+        lang: z
+          .enum(["he", "en"])
+          .optional()
+          .describe("Email language (defaults to the document's language)"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (args) => {
+      const body: Record<string, unknown> = {
+        doctype: args.doctype,
+        doc_id: args.doc_id,
+        email: args.email,
+        ...(args.cc && args.cc.length > 0 ? { cc: args.cc } : {}),
+        ...(args.subject ? { subject: args.subject } : {}),
+        ...(args.body ? { body: args.body } : {}),
+        ...(args.lang ? { lang: args.lang } : {}),
+      };
+      const out = await client.requestOrDryRun("/doc/send_email", body, {
+        sent: true,
+        doc_id: args.doc_id,
+        email: args.email,
+      });
+      return asContent(out, `Emailed ${args.doctype} #${args.doc_id} → ${args.email}`);
+    },
+  );
+
   // ───────── doc close ─────────
   server.registerTool(
     "icount_doc_close",

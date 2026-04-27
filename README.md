@@ -138,16 +138,17 @@ Or register it directly in a stdio-capable MCP client:
 
 ---
 
-## Tool catalogue (29)
+## Tool catalogue (30)
 
 All tools are prefixed `icount_`. Annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) are set so clients can decide when to confirm.
 
-### Documents (9)
+### Documents (10)
 - `icount_doc_create` — create invoice / receipt / invrec / refund / order / offer / delivery / deal
 - `icount_doc_get` — by id or docnum
 - `icount_doc_search` — date range, client, status, free-text
-- `icount_doc_list` — paginated
+- `icount_doc_list` — paginated (alias of doc_search)
 - `icount_doc_get_url` — hosted PDF URL
+- `icount_doc_send_email` — (re)send an existing document by email
 - `icount_doc_cancel` — destructive (issues credit doc for tax invoices)
 - `icount_doc_close` — mark paid/closed
 - `icount_doc_convert` — quote → order → invoice
