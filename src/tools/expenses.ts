@@ -67,23 +67,33 @@ export function registerExpenseTools(server: McpServer, client: IcountClient): v
     "icount_expense_search",
     {
       title: "Search iCount expenses",
-      description: "Find expenses in a date range, optionally filtered by supplier.",
+      description:
+        "Find expenses in a date range, optionally filtered by supplier. " +
+        "Both dates are optional: to_date defaults to today, from_date defaults to one year ago.",
       inputSchema: {
-        from_date: DateStringSchema,
-        to_date: DateStringSchema,
-        supplier_id: z.union([z.number().int(), z.string()]).optional(),
-        expense_type_id: z.union([z.number().int(), z.string()]).optional(),
+        from_date: DateStringSchema.nullish(),
+        to_date: DateStringSchema.nullish(),
+        supplier_id: z.union([z.number().int(), z.string()]).nullish(),
+        expense_type_id: z.union([z.number().int(), z.string()]).nullish(),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args) => {
+      const today = new Date();
+      const toDate = args.to_date ?? today.toISOString().slice(0, 10);
+      const oneYearAgo = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000);
+      const fromDate = args.from_date ?? oneYearAgo.toISOString().slice(0, 10);
+
       const out = await client.request<Record<string, unknown>>("/expense/search", {
-        start_date: args.from_date,
-        end_date: args.to_date,
+        start_date: fromDate,
+        end_date: toDate,
         ...(args.supplier_id != null ? { supplier_id: args.supplier_id } : {}),
         ...(args.expense_type_id != null ? { expense_type_id: args.expense_type_id } : {}),
       });
-      return asContent(out, summarizeArrayLike(out, "expense(s)"));
+      return asContent(
+        out,
+        `${summarizeArrayLike(out, "expense(s)")} (range ${fromDate} → ${toDate})`,
+      );
     },
   );
 
