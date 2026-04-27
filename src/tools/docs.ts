@@ -131,11 +131,13 @@ export function registerDocTools(server: McpServer, client: IcountClient): void 
   );
 
   // ───────── doc list ─────────
+  // iCount has no dedicated /doc/list endpoint; this is a thin alias over
+  // /doc/search with no filters, matching what users expect from a "list" tool.
   server.registerTool(
     "icount_doc_list",
     {
       title: "List iCount documents",
-      description: "List documents (optionally filtered by doctype). Paginated.",
+      description: "List documents (optionally filtered by doctype). Paginated. Backed by /doc/search.",
       inputSchema: {
         doctype: DocTypeSchema.optional(),
         ...PaginationSchema.shape,
@@ -143,7 +145,7 @@ export function registerDocTools(server: McpServer, client: IcountClient): void 
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args) => {
-      const out = await client.request<Record<string, unknown>>("/doc/list", {
+      const out = await client.request<Record<string, unknown>>("/doc/search", {
         ...(args.doctype ? { doctype: args.doctype } : {}),
         ...(args.page ? { page: args.page } : {}),
         ...(args.per_page ? { per_page: args.per_page } : {}),
