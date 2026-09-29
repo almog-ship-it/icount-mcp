@@ -4,7 +4,7 @@ import type { IcountClient } from "../client.js";
 import {
   ClientRefSchema,
   CurrencySchema,
-  DateStringSchema,
+  dateString,
   DocItemSchema,
   DocTypeSchema,
   LangSchema,
@@ -29,7 +29,7 @@ export function registerDocTools(server: McpServer, client: IcountClient): void 
         currency: CurrencySchema.optional().describe("Defaults to ILS"),
         lang: LangSchema.optional(),
         comments: z.string().optional().describe("Free-text notes shown on the document"),
-        due_date: DateStringSchema.optional().describe("Payment due date (invoices only)"),
+        due_date: dateString("Payment due date (invoices only)").optional(),
         send_email: z
           .boolean()
           .optional()
@@ -107,8 +107,8 @@ export function registerDocTools(server: McpServer, client: IcountClient): void 
       inputSchema: {
         doctype: DocTypeSchema.optional(),
         client_id: z.union([z.number().int(), z.string()]).optional(),
-        from_date: DateStringSchema.optional(),
-        to_date: DateStringSchema.optional(),
+        from_date: dateString().optional(),
+        to_date: dateString().optional(),
         only_open: z.boolean().optional().describe("If true, only unpaid/open documents"),
         text: z.string().optional().describe("Full-text search across docnum, client name, etc."),
         ...PaginationSchema.shape,
@@ -297,7 +297,7 @@ export function registerDocTools(server: McpServer, client: IcountClient): void 
       inputSchema: {
         from_doctype: DocTypeSchema,
         from_doc_id: z.union([z.number().int(), z.string()]),
-        to_doctype: DocTypeSchema,
+        to_doctype: DocTypeSchema.describe("Target document type (same values as from_doctype)"),
       },
       annotations: {
         readOnlyHint: false,

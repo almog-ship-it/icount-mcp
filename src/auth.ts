@@ -1,4 +1,4 @@
-import { OAuthError, validateAccessToken } from "./oauth.js";
+import { looksLikeIssuedToken, OAuthError, validateAccessToken } from "./oauth.js";
 
 export interface IcountCreds {
   token: string;
@@ -7,7 +7,17 @@ export interface IcountCreds {
 }
 
 export class AuthError extends Error {
-  constructor(public status: number, message: string, public hint?: string) {
+  /**
+   * `oauthError` is set when the Bearer was one of our OAuth tokens but is no longer
+   * valid (expired, key rotated). The Worker surfaces it as `error="invalid_token"` in
+   * WWW-Authenticate so the client refreshes instead of reporting the connector as broken.
+   */
+  constructor(
+    public status: number,
+    message: string,
+    public hint?: string,
+    public oauthError?: string,
+  ) {
     super(message);
     this.name = "AuthError";
   }
@@ -107,7 +117,15 @@ export async function extractCredsFromRequest(
       return { token: payload.t, cid: payload.c, dryRun };
     } catch (e) {
       if (!(e instanceof OAuthError)) throw e;
-      // Not an OAuth token (or invalid one) — fall through to legacy mode.
+      if (looksLikeIssuedToken(bearer)) {
+        throw new AuthError(
+          401,
+          `OAuth access token rejected: ${e.description}`,
+          "Refresh the token (or reconnect the connector).",
+          "invalid_token",
+        );
+      }
+      // Not one of our tokens — fall through to legacy mode.
     }
   }
 

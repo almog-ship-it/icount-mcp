@@ -1,6 +1,6 @@
 # icount-mcp
 
-Multi-tenant **MCP server** for **iCount** ([icount.co.il](https://www.icount.co.il/)) — Israeli invoicing, receipts, customers, expenses, and suppliers — exposed as 29 typed tools any MCP client can call.
+Multi-tenant **MCP server** for **iCount** ([icount.co.il](https://www.icount.co.il/)) — Israeli invoicing, receipts, customers, expenses, and suppliers — exposed as 32 typed tools any MCP client can call.
 
 - **Streamable HTTP** transport on **Cloudflare Workers** (one shared URL, anyone with their own iCount API token can use it).
 - **Stateless multi-tenancy**: each request carries its own `Authorization: Bearer <icount_token>` and `X-Icount-Cid: <company_id>` header. The server stores nothing.
@@ -57,7 +57,9 @@ In Claude Desktop, **Settings → Connectors → Add custom connector**:
 - **OAuth Client ID:** your iCount API token
 - **OAuth Client Secret:** your iCount CID
 
-Click Connect. After the OAuth handshake completes, the 29 `icount_*` tools appear in the chat tool picker.
+Click Connect. After the OAuth handshake completes, the 32 `icount_*` tools appear in the chat tool picker.
+
+Access tokens last 7 days and come with a 1-year refresh token, so the connector renews itself silently. Both are encrypted with `OAUTH_ENCRYPTION_KEY`: rotating that secret signs everyone out, so leave it alone once set.
 
 ### Option 2 — direct bearer (curl, scripts, Cursor, etc.)
 
@@ -138,7 +140,7 @@ Or register it directly in a stdio-capable MCP client:
 
 ---
 
-## Tool catalogue (30)
+## Tool catalogue (32)
 
 All tools are prefixed `icount_`. Annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) are set so clients can decide when to confirm.
 
@@ -160,9 +162,11 @@ All tools are prefixed `icount_`. Annotations (`readOnlyHint`, `destructiveHint`
 - `icount_client_get_open_docs`
 - `icount_client_get_contacts` / `_add_contact` / `_update_contact` / `_delete_contact`
 
-### Expenses (4)
-- `icount_expense_create`
-- `icount_expense_search`
+### Expenses (6)
+- `icount_expense_create` — with the supplier document attached and the payment recorded (see below)
+- `icount_expense_mark_paid` — record the payment of an existing expense
+- `icount_expense_get` — by expense id
+- `icount_expense_search` — date range, supplier, category, or supplier document number; compact rows by default
 - `icount_expense_types` (list categories)
 - `icount_expense_doctypes` (list supplier doc types)
 
@@ -173,6 +177,24 @@ All tools are prefixed `icount_`. Annotations (`readOnlyHint`, `destructiveHint`
 - `icount_account_info` — connectivity check
 
 ---
+
+## Attaching the receipt to an expense
+
+iCount takes the scan only as a multipart file part named `scan`, and accounts with "scan required" reject any expense without one (`missing_expense_scan`). Files: JPEG, PNG, GIF or PDF up to 10MB (HEIC must be converted to JPEG first). `icount_expense_create` accepts it three ways:
+
+1. **Upload link (remote Worker, default).** Call the tool without a scan. If the account requires one, nothing is created and the tool returns a link valid for one hour. The user opens it, picks the photo or PDF and presses send; the Worker then creates the expense with the file attached. An agent with a shell can instead run `curl -F "scan=@receipt.jpg" "<link>"`. The link carries the expense details and credentials encrypted, so the Worker stores nothing.
+2. **`scan_base64`** (+ `scan_filename`) for small files an agent can encode itself.
+3. **`scan_file_path`** — only in the local stdio mode, where the server can read the disk.
+
+Every path first searches for an expense with the same supplier + document number and returns it instead of booking the receipt twice (`allow_duplicate: true` overrides).
+
+`expense_paid: true` + `payment_method` (`cash`, `bank_transfer`, `credit_card`, `other`) records the payment right after creation through `/expense/update`. iCount tracks payments as payment rows, so the paid flag alone on `/expense/create` is stored as unpaid.
+
+After every create (and every upload), the tool reads the expense back and returns what iCount saved plus a warning for each field that differs from the request.
+
+`vat_amount` switches iCount to manual VAT: `0` records the expense without VAT, a positive amount is booked as the VAT with the rest as the net sum. Leave it out to let iCount derive VAT from the expense category. Note that iCount still shows an amount-before-VAT computed from the category's own VAT setting, even with no manual VAT; use a category defined without VAT when none should be deducted.
+
+`icount_expense_search` filters by document number and id itself: iCount's `/expense/search` ignores `expense_docnum` and returns every expense in the range.
 
 ## Notes & limits
 

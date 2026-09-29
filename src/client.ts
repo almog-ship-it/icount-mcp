@@ -19,6 +19,14 @@ export interface DryRunResult {
 
 export type IcountResponse<T> = T | DryRunResult;
 
+export interface UploadFile {
+  /** Form field name iCount expects (e.g. "scan"). */
+  field: string;
+  filename: string;
+  contentType: string;
+  data: Uint8Array;
+}
+
 /**
  * Stateless iCount HTTP client. One instance per request — owns the per-request creds.
  *
@@ -45,26 +53,65 @@ export class IcountClient {
     opts: RequestOptions = {},
   ): Promise<T> {
     const fullBody = { cid: this.creds.cid, ...body };
-    const url = `${this.baseUrl}${endpoint.startsWith("/") ? endpoint : "/" + endpoint}`;
 
+    return this.send<T>(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.creds.token}`,
+        Accept: "application/json",
+      },
+      body: JSON.stringify(fullBody),
+    }, opts.timeoutMs ?? 15000);
+  }
+
+  /**
+   * multipart/form-data POST — the only way iCount accepts file uploads
+   * (e.g. the `scan` field on /expense/create). Scalar fields go as form fields;
+   * booleans become "1"/"0". Nested objects are not supported here.
+   */
+  async requestMultipart<T = unknown>(
+    endpoint: string,
+    fields: Record<string, unknown>,
+    file: UploadFile,
+    opts: RequestOptions = {},
+  ): Promise<T> {
+    const form = new FormData();
+    form.append("cid", this.creds.cid);
+    for (const [k, v] of Object.entries(fields)) {
+      if (v == null) continue;
+      if (typeof v === "object") {
+        throw new Error(`requestMultipart: field '${k}' is an object; only scalars are supported`);
+      }
+      form.append(k, typeof v === "boolean" ? (v ? "1" : "0") : String(v));
+    }
+    form.append(
+      file.field,
+      new Blob([file.data as BlobPart], { type: file.contentType }),
+      file.filename,
+    );
+    // No Content-Type header: fetch sets multipart/form-data with the boundary.
+    return this.send<T>(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.creds.token}`,
+        Accept: "application/json",
+      },
+      body: form,
+    }, opts.timeoutMs ?? 60000);
+  }
+
+  private async send<T>(endpoint: string, init: RequestInit, timeoutMs: number): Promise<T> {
+    const url = `${this.baseUrl}${endpoint.startsWith("/") ? endpoint : "/" + endpoint}`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 15000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     let res: Response;
     try {
-      res = await this.fetchImpl(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.creds.token}`,
-          Accept: "application/json",
-        },
-        body: JSON.stringify(fullBody),
-        signal: controller.signal,
-      });
+      res = await this.fetchImpl(url, { ...init, signal: controller.signal });
     } catch (e) {
       if ((e as Error).name === "AbortError") {
-        throw new Error(`iCount request to ${endpoint} timed out after ${opts.timeoutMs ?? 15000}ms`);
+        throw new Error(`iCount request to ${endpoint} timed out after ${timeoutMs}ms`);
       }
       throw e;
     } finally {

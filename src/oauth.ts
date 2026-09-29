@@ -9,14 +9,20 @@
  * Token wire format:
  *   <type-byte 0x01>.<base64url(iv-12-bytes)>.<base64url(ciphertext+tag)>
  *
- * Two payload kinds, distinguished by the `kind` field in the JSON plaintext:
- *   - "code"   — authorization code (5-minute TTL), produced by /authorize, consumed by /token
- *   - "access" — access token (24-hour TTL), used as Bearer on MCP requests
+ * Payload kinds, distinguished by the `kind` field in the JSON plaintext:
+ *   - "code"    — authorization code (5-minute TTL), produced by /authorize, consumed by /token
+ *   - "access"  — access token (7-day TTL), used as Bearer on MCP requests
+ *   - "refresh" — refresh token (1-year TTL), exchanged at /token for a fresh access token.
+ *                 Without it, clients drop the connector every time the access token expires.
+ *   - "upload"  — one-shot expense upload link (1-hour TTL), carries the expense body so
+ *                 the receipt file can be POSTed to /upload/<token> without any storage.
  */
 
 const TOKEN_VERSION = "01";
 const AUTH_CODE_TTL_SECONDS = 5 * 60;
-export const ACCESS_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+export const ACCESS_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const REFRESH_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
+export const UPLOAD_TOKEN_TTL_SECONDS = 60 * 60;
 
 export interface AuthCodePayload {
   kind: "code";
@@ -44,7 +50,46 @@ export interface AccessTokenPayload {
   exp: number;
 }
 
-export type TokenPayload = AuthCodePayload | AccessTokenPayload;
+export interface RefreshTokenPayload {
+  kind: "refresh";
+  /** iCount API token. */
+  t: string;
+  /** iCount CID. */
+  c: string;
+  /** Audience — the canonical Worker URL. */
+  aud: string;
+  /** Unix-seconds expiry. */
+  exp: number;
+}
+
+export interface UploadTokenPayload {
+  kind: "upload";
+  /** iCount API token. */
+  t: string;
+  /** iCount CID. */
+  c: string;
+  /** Audience — the canonical Worker URL. */
+  aud: string;
+  /** The /expense/create body (everything except the scan file). */
+  b: Record<string, unknown>;
+  /** What to do and check after creation (payment, expected values). */
+  x?: Record<string, unknown>;
+  /** Unix-seconds expiry. */
+  exp: number;
+}
+
+export type TokenPayload =
+  | AuthCodePayload
+  | AccessTokenPayload
+  | RefreshTokenPayload
+  | UploadTokenPayload;
+
+const TOKEN_KINDS = new Set(["code", "access", "refresh", "upload"]);
+
+/** True if the string has the shape of a token this Worker issued (vs. a raw iCount token). */
+export function looksLikeIssuedToken(s: string): boolean {
+  return /^01\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s);
+}
 
 // ──────────────────────────── crypto ────────────────────────────
 
@@ -113,7 +158,7 @@ export async function decryptPayload(
   } catch {
     throw new OAuthError("invalid_token", "Decrypted payload is not JSON");
   }
-  if (parsed.kind !== "code" && parsed.kind !== "access") {
+  if (!TOKEN_KINDS.has(parsed.kind)) {
     throw new OAuthError("invalid_token", "Unknown token kind");
   }
   return parsed;
@@ -166,6 +211,44 @@ export async function issueAccessToken(
   return { accessToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
 }
 
+export async function issueRefreshToken(
+  args: { token: string; cid: string; audience: string },
+  secret: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<string> {
+  const payload: RefreshTokenPayload = {
+    kind: "refresh",
+    t: args.token,
+    c: args.cid,
+    aud: args.audience,
+    exp: now + REFRESH_TOKEN_TTL_SECONDS,
+  };
+  return encryptPayload(payload, secret);
+}
+
+export async function issueUploadToken(
+  args: {
+    token: string;
+    cid: string;
+    audience: string;
+    body: Record<string, unknown>;
+    expect?: Record<string, unknown>;
+  },
+  secret: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<string> {
+  const payload: UploadTokenPayload = {
+    kind: "upload",
+    t: args.token,
+    c: args.cid,
+    aud: args.audience,
+    b: args.body,
+    ...(args.expect ? { x: args.expect } : {}),
+    exp: now + UPLOAD_TOKEN_TTL_SECONDS,
+  };
+  return encryptPayload(payload, secret);
+}
+
 // ──────────────────────────── validation ────────────────────────────
 
 export async function validateAuthCode(
@@ -199,6 +282,44 @@ export async function validateAccessToken(
   }
   if (payload.exp < now) {
     throw new OAuthError("invalid_token", "Access token expired");
+  }
+  if (!audienceMatches(payload.aud, expectedAudience)) {
+    throw new OAuthError("invalid_token", "Audience mismatch");
+  }
+  return payload;
+}
+
+export async function validateRefreshToken(
+  refreshToken: string,
+  secret: string,
+  expectedAudience: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<RefreshTokenPayload> {
+  const payload = await decryptPayload(refreshToken, secret);
+  if (payload.kind !== "refresh") {
+    throw new OAuthError("invalid_grant", "Token is not a refresh token");
+  }
+  if (payload.exp < now) {
+    throw new OAuthError("invalid_grant", "Refresh token expired");
+  }
+  if (!audienceMatches(payload.aud, expectedAudience)) {
+    throw new OAuthError("invalid_grant", "Audience mismatch");
+  }
+  return payload;
+}
+
+export async function validateUploadToken(
+  uploadToken: string,
+  secret: string,
+  expectedAudience: string,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<UploadTokenPayload> {
+  const payload = await decryptPayload(uploadToken, secret);
+  if (payload.kind !== "upload") {
+    throw new OAuthError("invalid_token", "Token is not an upload link");
+  }
+  if (payload.exp < now) {
+    throw new OAuthError("invalid_token", "Upload link expired");
   }
   if (!audienceMatches(payload.aud, expectedAudience)) {
     throw new OAuthError("invalid_token", "Audience mismatch");

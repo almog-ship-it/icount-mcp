@@ -1,22 +1,36 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { AuthError, extractCredsFromRequest } from "./auth.js";
+import { IcountClient } from "./client.js";
+import { IcountApiError } from "./errors.js";
+import { type ExpenseExpectation, finalizeExpense } from "./expense-ops.js";
 import {
-  ACCESS_TOKEN_TTL_SECONDS,
+  createExpenseWithScan,
+  findExistingExpense,
+  MAX_SCAN_BYTES,
+  ScanError,
+  validateScan,
+} from "./expense-scan.js";
+import {
   isAllowedRedirectUri,
   issueAccessToken,
   issueAuthCode,
+  issueRefreshToken,
+  issueUploadToken,
   OAuthError,
   validateAuthCode,
+  validateRefreshToken,
+  validateUploadToken,
   verifyPkce,
 } from "./oauth.js";
 import { buildServer, SERVER_NAME, SERVER_VERSION } from "./server.js";
+import { uploadFormPage, uploadResultPage } from "./upload-page.js";
 
 interface Env {
   MCP_ACCESS_KEY?: string;
   OAUTH_ENCRYPTION_KEY?: string;
 }
 
-const TOOL_COUNT = 30;
+const TOOL_COUNT = 32;
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -59,7 +73,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
       token_endpoint: `${canonicalUrl}/token`,
       registration_endpoint: `${canonicalUrl}/register`,
       response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
       scopes_supported: ["mcp"],
@@ -76,6 +90,20 @@ async function handle(request: Request, env: Env): Promise<Response> {
 
   if (request.method === "POST" && url.pathname === "/token") {
     return handleToken(request, env, canonicalUrl);
+  }
+
+  if (url.pathname.startsWith("/upload/")) {
+    return handleUpload(request, env, canonicalUrl, url.pathname.slice("/upload/".length));
+  }
+
+  // Stateless server: no standalone SSE stream (GET) and no sessions to end (DELETE).
+  // The spec's answer for both is 405; clients then stick to plain POSTs. Serving a
+  // GET stream we immediately close makes some clients reconnect in a loop.
+  if (
+    (request.method === "GET" && request.headers.get("accept")?.includes("text/event-stream")) ||
+    request.method === "DELETE"
+  ) {
+    return new Response(null, { status: 405, headers: { Allow: "POST" } });
   }
 
   // Health check on GET (no creds required)
@@ -104,12 +132,30 @@ async function handle(request: Request, env: Env): Promise<Response> {
         { error: e.message, hint: e.hint },
         e.status,
         canonicalUrl,
+        e.oauthError,
       );
     }
     throw e;
   }
 
-  const server = buildServer(creds);
+  const encryptionKey = env.OAUTH_ENCRYPTION_KEY;
+  const server = buildServer(creds, {
+    issueUploadLink: encryptionKey
+      ? async ({ body, expect }) => {
+          const token = await issueUploadToken(
+            {
+              token: creds.token,
+              cid: creds.cid,
+              audience: canonicalUrl,
+              body,
+              expect: expect as unknown as Record<string, unknown>,
+            },
+            encryptionKey,
+          );
+          return `${canonicalUrl}/upload/${token}`;
+        }
+      : undefined,
+  });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -147,7 +193,7 @@ async function handleRegister(request: Request, canonicalUrl: string): Promise<R
         typeof body.token_endpoint_auth_method === "string"
           ? body.token_endpoint_auth_method
           : "client_secret_post",
-      grant_types: ["authorization_code"],
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       registration_client_uri: `${canonicalUrl}/register`,
     },
@@ -253,8 +299,17 @@ async function handleToken(
   const clientId = form.get("client_id");
   const clientSecret = form.get("client_secret");
 
+  if (grantType === "refresh_token") {
+    return handleRefresh(form, env.OAUTH_ENCRYPTION_KEY, canonicalUrl);
+  }
   if (grantType !== "authorization_code") {
-    return json({ error: "unsupported_grant_type", error_description: "grant_type must be authorization_code" }, 400);
+    return json(
+      {
+        error: "unsupported_grant_type",
+        error_description: "grant_type must be authorization_code or refresh_token",
+      },
+      400,
+    );
   }
   if (!code || !codeVerifier || !redirectUri || !clientId) {
     return json({ error: "invalid_request", error_description: "code, code_verifier, redirect_uri, and client_id are required" }, 400);
@@ -288,17 +343,152 @@ async function handleToken(
     return json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
   }
 
-  const { accessToken, expiresIn } = await issueAccessToken(
-    { token: clientId, cid: clientSecret, audience: canonicalUrl },
-    env.OAUTH_ENCRYPTION_KEY,
-  );
+  return tokenResponse(clientId, clientSecret, canonicalUrl, env.OAUTH_ENCRYPTION_KEY);
+}
 
+/**
+ * refresh_token grant. The refresh token is self-contained (encrypted iCount token +
+ * cid), so no storage is involved. Each refresh also rotates the refresh token.
+ */
+async function handleRefresh(
+  form: URLSearchParams,
+  secret: string,
+  canonicalUrl: string,
+): Promise<Response> {
+  const refreshToken = form.get("refresh_token");
+  if (!refreshToken) {
+    return json({ error: "invalid_request", error_description: "refresh_token is required" }, 400);
+  }
+  let payload;
+  try {
+    payload = await validateRefreshToken(refreshToken, secret, canonicalUrl);
+  } catch (e) {
+    if (e instanceof OAuthError) {
+      return json({ error: "invalid_grant", error_description: e.description }, 400);
+    }
+    throw e;
+  }
+  const clientId = form.get("client_id");
+  if (clientId && clientId !== payload.t) {
+    return json({ error: "invalid_grant", error_description: "client_id does not match the refresh token" }, 400);
+  }
+  return tokenResponse(payload.t, payload.c, canonicalUrl, secret);
+}
+
+async function tokenResponse(
+  icountToken: string,
+  cid: string,
+  canonicalUrl: string,
+  secret: string,
+): Promise<Response> {
+  const args = { token: icountToken, cid, audience: canonicalUrl };
+  const { accessToken, expiresIn } = await issueAccessToken(args, secret);
+  const refreshToken = await issueRefreshToken(args, secret);
   return json({
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: expiresIn,
+    refresh_token: refreshToken,
     scope: "mcp",
   });
+}
+
+// ──────────────────────── expense scan upload ────────────────────────
+
+/**
+ * GET  /upload/<token> — HTML form to pick the receipt file.
+ * POST /upload/<token> — multipart with a `scan` (or `file`) part; creates the
+ *                        expense in iCount with the file attached.
+ * The token (from icount_expense_create) carries the credentials and the expense
+ * body, encrypted, and expires after an hour. A repeat POST finds the expense it
+ * already created (same supplier + document number) instead of creating another.
+ */
+async function handleUpload(
+  request: Request,
+  env: Env,
+  canonicalUrl: string,
+  token: string,
+): Promise<Response> {
+  const wantsHtml = (request.headers.get("accept") ?? "").includes("text/html");
+  const fail = (status: number, title: string, detail: string): Response =>
+    wantsHtml
+      ? html(uploadResultPage(false, title, detail), status)
+      : json({ ok: false, error: title, detail }, status);
+
+  if (request.method !== "GET" && request.method !== "POST") {
+    return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
+  }
+  if (!env.OAUTH_ENCRYPTION_KEY) {
+    return fail(500, "השרת לא מוגדר", "OAUTH_ENCRYPTION_KEY is not set.");
+  }
+
+  let payload;
+  try {
+    payload = await validateUploadToken(decodeURIComponent(token), env.OAUTH_ENCRYPTION_KEY, canonicalUrl);
+  } catch (e) {
+    if (e instanceof OAuthError) {
+      return fail(
+        410,
+        "הקישור פג תוקף או לא תקין",
+        `${e.description}. Ask Claude to run icount_expense_create again for a new link.`,
+      );
+    }
+    throw e;
+  }
+  const body = payload.b;
+  const maxMb = MAX_SCAN_BYTES / 1024 / 1024;
+
+  if (request.method === "GET") {
+    return html(uploadFormPage(body, maxMb));
+  }
+
+  let file: File | null = null;
+  try {
+    const form = await request.formData();
+    const entry = form.get("scan") ?? form.get("file");
+    if (entry && typeof entry !== "string") file = entry;
+  } catch {
+    return fail(400, "הבקשה לא תקינה", "Send multipart/form-data with the file in a part named 'scan'.");
+  }
+  if (!file) {
+    return fail(400, "לא צורף קובץ", "Attach the receipt in a multipart part named 'scan'.");
+  }
+
+  const client = new IcountClient({ token: payload.t, cid: payload.c, dryRun: false });
+  try {
+    const scan = validateScan(new Uint8Array(await file.arrayBuffer()), file.name);
+
+    const existing = await findExistingExpense(client, body.supplier_id, body.expense_docnum);
+    if (existing) {
+      const id = existing.expense_id ?? "?";
+      return wantsHtml
+        ? html(uploadResultPage(true, "ההוצאה כבר רשומה", `הוצאה מספר ${id} כבר קיימת במסמך הזה. לא נוצרה כפילות.`))
+        : json({ ok: true, already_existed: true, expense_id: id });
+    }
+
+    const out = await createExpenseWithScan(client, body, scan);
+    const id = out.expense_id ?? "?";
+    const expect = (payload.x as ExpenseExpectation | undefined) ?? {
+      expense_sum: Number(body.expense_sum),
+      scan: true,
+    };
+    const fin = await finalizeExpense(client, out.expense_id, expect);
+    return wantsHtml
+      ? html(
+          uploadResultPage(
+            true,
+            "ההוצאה נרשמה",
+            `הוצאה מספר ${id} נוצרה ב-iCount עם הקבלה מצורפת.` +
+              (expect.payment ? " התשלום נרשם." : ""),
+            fin.warnings,
+          ),
+        )
+      : json({ ok: true, expense_id: id, scan: scan.filename, saved: fin.saved, warnings: fin.warnings });
+  } catch (e) {
+    if (e instanceof ScanError) return fail(400, "הקובץ לא התקבל", e.message);
+    if (e instanceof IcountApiError) return fail(502, "iCount החזיר שגיאה", e.message);
+    return fail(502, "שגיאה בשליחה ל-iCount", (e as Error).message);
+  }
 }
 
 // ──────────────────────── helpers ────────────────────────
@@ -326,12 +516,29 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function jsonWithWwwAuth(body: unknown, status: number, canonicalUrl: string): Response {
+function html(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
+function jsonWithWwwAuth(
+  body: unknown,
+  status: number,
+  canonicalUrl: string,
+  oauthError?: string,
+): Response {
   const headers = new Headers({ "content-type": "application/json" });
   if (status === 401) {
+    const error = oauthError ? `error="${oauthError}", ` : "";
     headers.set(
       "WWW-Authenticate",
-      `Bearer resource_metadata="${canonicalUrl}/.well-known/oauth-protected-resource", scope="mcp"`,
+      `Bearer ${error}resource_metadata="${canonicalUrl}/.well-known/oauth-protected-resource", scope="mcp"`,
     );
   }
   return new Response(JSON.stringify(body), { status, headers });
@@ -356,6 +563,3 @@ function oauthError(
   }
   return json({ error: code, error_description: description }, 400);
 }
-
-// Suppress unused-export warnings for vars that future helpers may use.
-void ACCESS_TOKEN_TTL_SECONDS;

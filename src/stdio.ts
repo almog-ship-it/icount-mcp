@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildServer } from "./server.js";
 
@@ -13,7 +14,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const server = buildServer({ token, cid, dryRun });
+  const server = buildServer(
+    { token, cid, dryRun },
+    { readLocalFile: async (path) => new Uint8Array(await readFile(path)) },
+  );
   const transport = new StdioServerTransport();
   await server.connect(transport);
 

@@ -94,35 +94,45 @@ export const LangSchema = z
  * Accepts any reasonable date string Claude may produce (strict YYYY-MM-DD,
  * ISO 8601 datetime, RFC dates) and normalizes to YYYY-MM-DD for iCount.
  * Strict format is documented in the description so the model prefers it.
+ *
+ * A factory, not a shared constant: reusing one schema instance across fields
+ * makes the JSON-schema generator emit `$ref: #/properties/<first field>`,
+ * which drops the per-field description and the YYYY-MM-DD hint.
  */
-export const DateStringSchema = z
-  .string()
-  .transform((raw, ctx) => {
-    const s = raw.trim();
-    if (!s) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Date is empty" });
+export function dateString(description?: string) {
+  const hint = "YYYY-MM-DD (ISO datetimes also accepted, normalized to YYYY-MM-DD)";
+  return dateStringBase().describe(description ? `${description}. Format: ${hint}` : hint);
+}
+
+function dateStringBase() {
+  return z
+    .string()
+    .transform((raw, ctx) => {
+      const s = raw.trim();
+      if (!s) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Date is empty" });
+        return z.NEVER;
+      }
+      // Fast path: already YYYY-MM-DD.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      // Lenient: YYYY-M-D, YYYY/MM/DD, etc.
+      const lenient = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+      if (lenient) {
+        const [, y, m, d] = lenient;
+        return `${y}-${m!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+      }
+      // Last resort: let JS try to parse (handles ISO-8601 with time, RFC, etc.).
+      const parsed = new Date(s);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString().slice(0, 10);
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Could not parse as a date. Use YYYY-MM-DD.",
+      });
       return z.NEVER;
-    }
-    // Fast path: already YYYY-MM-DD.
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    // Lenient: YYYY-M-D, YYYY/MM/DD, etc.
-    const lenient = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
-    if (lenient) {
-      const [, y, m, d] = lenient;
-      return `${y}-${m!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
-    }
-    // Last resort: let JS try to parse (handles ISO-8601 with time, RFC, etc.).
-    const parsed = new Date(s);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toISOString().slice(0, 10);
-    }
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Could not parse as a date. Use YYYY-MM-DD.",
     });
-    return z.NEVER;
-  })
-  .describe("Date in YYYY-MM-DD format (ISO datetimes also accepted, normalized to YYYY-MM-DD)");
+}
 
 export const PaginationSchema = z.object({
   page: z.number().int().positive().optional().describe("Page number (1-indexed)"),

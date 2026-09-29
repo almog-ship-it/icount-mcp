@@ -5,7 +5,7 @@ import { buildServer } from "../src/server.js";
 const fakeCreds = { token: "fake-token", cid: "12345", dryRun: true };
 
 describe("server tool registration", () => {
-  it("exposes 30 tools", async () => {
+  it("exposes 32 tools", async () => {
     const server = buildServer(fakeCreds);
     // Reach into the underlying low-level Server to list registered tool names.
     // The McpServer keeps tools in a private map; the public API exposes them via the protocol,
@@ -14,7 +14,7 @@ describe("server tool registration", () => {
       _registeredTools: Record<string, unknown>;
     };
     const names = Object.keys(internals._registeredTools);
-    expect(names.length).toBe(30);
+    expect(names.length).toBe(32);
 
     expect(names).toEqual(
       expect.arrayContaining([
@@ -41,6 +41,8 @@ describe("server tool registration", () => {
         "icount_client_delete_contact",
         "icount_expense_create",
         "icount_expense_search",
+        "icount_expense_get",
+        "icount_expense_mark_paid",
         "icount_expense_types",
         "icount_expense_doctypes",
         "icount_supplier_get",
